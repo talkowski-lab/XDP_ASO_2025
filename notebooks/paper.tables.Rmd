@@ -1,0 +1,256 @@
+---
+title: "Tables included in the Paper"
+author: "Siddharth Reed"
+date: "`r Sys.Date()`"
+output: 
+    html_document:
+        keep_md: true
+        toc: true
+        toc_float: true
+        theme: paper
+        code_folding: hide
+        df_print: paged
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1800px !important;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+# Prepare data
+
+```{r knitr}
+library(knitr)
+knitr::opts_chunk$set(
+    dev=c('png', 'pdf', 'tiff'),
+    dpi=300
+)
+```
+Set up file locations + load dependences
+```{r file_locs, results=FALSE, message=FALSE, warning=FALSE}
+library(here)
+here::i_am('notebooks/paper.tables.Rmd')
+BASE_DIR <- here()
+SCRIPT_DIR <- here('scripts')
+source(file.path(SCRIPT_DIR, 'locations.R'))
+source(file.path(SCRIPT_DIR, 'constants.R'))
+source(file.path(SCRIPT_DIR, 'enrichment_utils.R'))
+source(file.path(SCRIPT_DIR, 'notebook.utils.R'))
+source(file.path(SCRIPT_DIR, 'data_utils.R'))
+source(file.path(SCRIPT_DIR, 'glm_utils.R'))
+library(magrittr)
+library(tidyverse)
+library(dplyr)
+TABLES_DIR <- file.path(BASE_DIR, '2025-06-22_paper.tables')
+ENRICHMENTS_DIR <- file.path(BASE_DIR, '2025-06-18_enrichment.results')
+
+```
+Load data for statistics
+```{r load_stats, rows.print=5, message=FALSE, results=FALSE}
+TAF1.targets <- 
+    TAF1_TARGETS_FILE %>%
+    read_tsv(col_names=FALSE) %>% 
+    deframe()
+con_vs_xdp.results.df <- 
+    XDP_DEG_RESULTS_FILE %>% 
+    read_tsv(show_col_types=FALSE) %>% 
+    filter(Contrast == 'ConditionNO.XDP vs ConditionNO.CON') %>% 
+    dplyr::select(-c(Contrast)) %>% 
+    mutate(is.Signature=fdr < 0.1) %>% 
+    mutate(is.TAF1.target=gene_name %in% TAF1.targets)
+# bootstrap.results.df <- load_bootstrap_results()
+```
+
+# Supp. Tables
+
+The results of the bootstrapping analysis for all genes with the following columns; 
+- EnsemblID: the EnsemblID of the gene 
+- expression_pattern: which expression pattern the results are for (up, down, nominal, nominal_and_up, nominal_and_down, fdr, fdr_and_up, fdr_and_down) 
+- bootstraps: the number of bootstraps where this gene passed the CPM thresholding (max is 52,800 total number of bootstraps computed) 
+- raw_value: the number of bootstraps in which gene shows the specified expression_pattern 
+- fraction_of_bootstraps: raw_value / bootstraps
+The expression patterns are defined as follows; 
+- up: the gene has an LFC > 0 
+- down: the gene has an LFC < 0 
+- nominal: the gene has a p-value < 0.05 
+- nominal_and_up: the gene has an LFC > 0 and p-value < 0.5 
+- nominal_and_down: the gene has an LFC < 0 and a p-value < 0.05 
+- fdr: the gene has a BH p-value < 0.1 
+- fdr_and_up: the gene has an LFC > 0 and a BH p-value < 0.1 
+- fdr_and_down: the gene has an LFC < 0 and a BH p-value < 0.1
+```{r make_table_S7}
+T'ASO131'ABLE_NUMBER <- 'S7'
+TABLE_TITLE <- 'Bootstrap_Results'
+check_cached_results(
+    results_file=
+        file.path(
+            TABLES_DIR, 
+            glue('{TABLE_NUMBER}-{TABLE_TITLE}.tsv')
+        ),
+    force_redo=FALSE,
+    return_data=TRUE,
+    show_col_types=FALSE,
+    results_fnc=make_bootstrap_results
+)
+```
+
+Table S8: Differential expression results comparing paired ASO Treated/CRISPR edited XDP samples and untreated XDP samples.
+```{r make_table_S8}
+TABLE_NUMBER <- 'S8'
+TABLE_TITLE <- 'Paired.Samples.Fold.Changes'
+check_cached_results(
+    results_file=
+        file.path(
+            TABLES_DIR, 
+            glue('{TABLE_NUMBER}-{TABLE_TITLE}.tsv')
+        ),
+    force_redo=FALSE,
+    return_data=TRUE,
+    show_col_types=FALSE,
+    results_fnc=read_tsv,
+    file=file.path(ENRICHMENTS_DIR, 'SamplePairs-AllPairs-LFC+CIs.tsv')
+)
+```
+
+Differential expression results comparing naive XDPs vs Controls.
+```{r make_table_S10}
+TABLE_NUMBER <- 'S10'
+TABLE_TITLE <- 'XDP.Naive.DEG.Results'
+check_cached_results(
+    results_file=
+        file.path(
+            TABLES_DIR, 
+            glue('{TABLE_NUMBER}-{TABLE_TITLE}.tsv')
+        ),
+    force_redo=FALSE,
+    return_data=TRUE,
+    show_col_types=FALSE,
+    results_fnc=read_tsv,
+    file=file.path(GLM_RESULTS_DIR, 'NO.CON+NO.XDP_naive-DEGResults.tsv')
+)
+```
+
+Differential expression results comparing unedited XDPs vs Controls.
+```{r make_table_S11}
+TABLE_NUMBER <- 'S11'
+TABLE_TITLE <- 'XDP.Unedited.DEG.Results'
+check_cached_results(
+    results_file=
+        file.path(
+            TABLES_DIR, 
+            glue('{TABLE_NUMBER}-{TABLE_TITLE}.tsv')
+        ),
+    force_redo=FALSE,
+    return_data=TRUE,
+    show_col_types=FALSE,
+    results_fnc=read_tsv,
+    file=file.path(GLM_RESULTS_DIR, 'NO.CON+NO.XDP_non_edit-DEGResults.tsv')
+)
+```
+
+Differential expression results comparing all XDPs vs Controls.
+```{r make_table_S12}
+TABLE_NUMBER <- 'S12'
+TABLE_TITLE <- 'XDP.DEG.Results'
+check_cached_results(
+    results_file=
+        file.path(
+            TABLES_DIR, 
+            glue('{TABLE_NUMBER}-{TABLE_TITLE}.tsv')
+        ),
+    force_redo=FALSE,
+    return_data=TRUE,
+    show_col_types=FALSE,
+    results_fnc=read_tsv,
+    file=XDP_DEG_RESULTS_FILE
+)
+```
+
+Functional enrichment results for the XDP signature set of genes i.e. p < 0.05 & abs(lfc) >= 1.2 comparing NO.XDP vs NO.CON (n=1490 genes)
+```{r make_table_S13}
+TABLE_NUMBER <- 'S13'
+TABLE_TITLE <- 'XDP.FDR.DEG.Functional.Enrichments'
+check_cached_results(
+    results_file=
+        file.path(
+            TABLES_DIR, 
+            glue('{TABLE_NUMBER}-{TABLE_TITLE}.tsv')
+        ),
+    force_redo=FALSE,
+    return_data=TRUE,
+    show_col_types=FALSE,
+    results_fnc=read_tsv,
+    file=ENRICHMENTS_FDR_FILE
+)
+```
+
+List of all genes whose expression is "rescued" in XDP by each treatment (ASOs + CRISPR). Any gene not listed was not rescued.
+```{r make_table_S14}
+TABLE_NUMBER <- 'S14'
+TABLE_TITLE <- 'Rescued.Gene.Status'
+check_cached_results(
+    results_file=
+        file.path(
+            TABLES_DIR, 
+            glue('{TABLE_NUMBER}-{TABLE_TITLE}.tsv')
+        ),
+    force_redo=TRUE,
+    return_data=TRUE,
+    show_col_types=FALSE,
+    results_fnc=
+        function(filepath) {
+            filepath %>%
+            read_tsv() %>%
+            # filter(isRescued.Naive) %>% 
+            # filter(isRescued %in% c('Only Naive', 'Both')) %>%
+            select( 
+                -c(
+                    Passes.Ztest.vs.NO.CON,
+                    Passes.Ztest.vs.NO.XDP,
+                    isRescued.2ZTests,
+                    isRescued
+                )
+            )
+        },
+    filepath=RESCUED_GENES_RESULTS_FILE
+)
+```
+
+Functional enrichment results for XDP Signature genes i.e. genes with FDR < 0.1 comparing NO.XDP vs NO.CON.
+```{r make_table_SX, eval=FALSE}
+TABLE_NUMBER <- 'S'
+TABLE_TITLE <- 'XDP.Signatures.Enrichments'
+check_cached_results(
+    results_file=
+        file.path(
+            TABLES_DIR, 
+            glue('{TABLE_NUMBER}-{TABLE_TITLE}.tsv')
+        ),
+    force_redo=FALSE,
+    return_data=TRUE,
+    show_col_types=FALSE,
+    results_fnc=read_tsv,
+    file=ENRICHMENTS_FDR_FILE
+)
+```
+
+Functional enrichment results for XDP signature genes (FDR < 0.1) that also show no significant difference in expression (p-value > 0.05) between dSVA XDP and Untreated Controls i.e. dSVA Naively Rescued genes.
+```{r make_table_SXX, eval=FALSE}
+TABLE_NUMBER <- 'S'
+TABLE_TITLE <- 'dSVA.Naive.Rescue.Enrichments'
+check_cached_results(
+    results_file=
+        file.path(
+            TABLES_DIR, 
+            glue('{TABLE_NUMBER}-{TABLE_TITLE}.tsv')
+        ),
+    force_redo=FALSE,
+    return_data=TRUE,
+    show_col_types=FALSE,
+    results_fnc=read_tsv,
+    file=file.path(ENRICHMENTS_DIR, 'Enrichments-RescuedGenes-dSVA-isRescued.Naive-NoOverlap.tsv')
+)
+```
