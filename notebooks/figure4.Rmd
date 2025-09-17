@@ -1,0 +1,709 @@
+---
+title: "Results for Figure 4"
+author: "Siddharth Reed"
+date: "`r Sys.Date()`"
+output: 
+    html_document:
+        keep_md: true
+        toc: true
+        toc_float: true
+        theme: paper
+        code_folding: hide
+        df_print: paged
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1800px !important;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+# Dependencies
+
+```{r knitr}
+library(knitr)
+knitr::opts_chunk$set(
+    dev=c('png', 'pdf', 'tiff'),
+    dpi=300
+)
+```
+Set up file locations + load dependences
+```{r dependencies, results=FALSE, message=FALSE, warning=FALSE}
+library(here)
+here::i_am('notebooks/paper.tables.Rmd')
+BASE_DIR <- here()
+SCRIPT_DIR <- here('scripts')
+source(file.path(SCRIPT_DIR, 'locations.R'))
+source(file.path(SCRIPT_DIR, 'constants.R'))
+source(file.path(SCRIPT_DIR, 'enrichment_utils.R'))
+source(file.path(SCRIPT_DIR, 'data_utils.R'))
+source(file.path(SCRIPT_DIR, 'glm_utils.R'))
+library(magrittr)
+library(tidyverse)
+library(dplyr)
+library(ComplexUpset)
+```
+
+# Prepare data
+
+Load data for statistics
+```{r load_stats, rows.print=5, message=FALSE, results=FALSE}
+TAF1.targets <- 
+    TAF1_TARGETS_FILE %>%
+    read_tsv(col_names=FALSE) %>% 
+    deframe()
+con_vs_xdp.results.df <- 
+    XDP_DEG_RESULTS_FILE %>% 
+    read_tsv(show_col_types=FALSE) %>% 
+    filter(Contrast == 'ConditionNO.XDP vs ConditionNO.CON') %>% 
+    dplyr::select(-c(Contrast)) %>% 
+    mutate(is.Signature=fdr < 0.1) %>% 
+    mutate(is.TAF1.target=gene_name %in% TAF1.targets)
+# bootstrap.results.df <- load_bootstrap_results()
+```
+Join LFC + rescue data
+```{r rescued_genes_lists}
+rescued.genes.df <- 
+    RESCUED_GENES_RESULTS_FILE %>% 
+    read_tsv(show_col_types=FALSE) %>% 
+    mutate(
+        Treatment =
+            case_when(
+                Treatment == 'dSVA' ~ 'dSVA',
+                TRUE ~ gsub('^', 'ASO', Treatment)
+            )
+    ) %>% 
+    dplyr::rename('treatment'=Treatment) %>% 
+    filter(!is.na(isRescued)) %>% 
+    add_column(Rescued.Status=TRUE) %>% 
+    pivot_wider(
+        names_from=isRescued,
+        values_from=Rescued.Status,
+        values_fill=FALSE
+    ) %>% 
+    # head(3) %>% t()
+    pivot_longer(
+        -c(EnsemblID, gene_name, treatment),
+        names_to='Rescue.Category',
+        values_to='isRescued'
+    ) %>% 
+    filter(!(Rescue.Category %in% c('Not Rescued')))
+rescued.genes.df %>% dplyr::count(treatment, Rescue.Category) %>% print(n=Inf)
+```
+```{r treatment_DEG_results}
+treatment.degs.df <- 
+    load_deg_results() %>%
+    filter(
+        !is.na(pvalue), 
+        !is.na(lfc),
+        comparison == 'NO.CON+NO.XDP' | denominator == 'NO.XDP'
+    ) %>%
+    dplyr::select(-c(comparison, denominator)) %>%
+    mutate(
+        numerator=
+            case_when(
+                numerator == 'NO.XDP' ~ 'Untreated',
+                numerator == 'NO.dSVA' ~ 'dSVA',
+                TRUE ~ gsub('(.*)\\.XDP', 'ASO\\1', numerator)
+            )
+    ) %>% 
+    dplyr::rename('treatment'=numerator) %>%
+    pivot_longer(c(fdr, lfc, pvalue), names_to='stat', values_to='value') %>%
+    pivot_wider(names_from=treatment, values_from=value) %>%
+    pivot_longer(c(starts_with('ASO'), dSVA), names_to='treatment', values_to='Treated') %>% 
+    pivot_wider(names_from=stat, values_from=c(Treated, Untreated), names_sep='.') %>%
+    filter(across(where(is.numeric), ~ !is.na(.x))) %>% 
+    mutate(isSignature=Untreated.fdr < 0.1)
+treatment.degs.df %>% dplyr::count(isSignature, treatment) %>% print(n=Inf)
+```
+```{r join_rescue_treatment_data}
+deg.rescues.df <- 
+    rescued.genes.df %>% 
+    # mutate(isRescued=ifelse(isRescued, 'Rescued', 'Not Rescued')) %>% 
+    # pivot_wider(names_from=Rescue.Category, values_from=isRescued) %>% 
+    filter(Rescue.Category == 'isRescued.Naive') %>% 
+    inner_join(
+        treatment.degs.df %>% 
+        filter(abs(Treated.lfc) < 25, abs(Untreated.lfc) < 25),
+        by=
+            join_by(
+                EnsemblID,
+                gene_name, 
+                treatment
+            )
+    ) %>%
+    mutate(
+        Gene.Status=
+            case_when(
+                 isSignature &  isRescued ~ 'Rescued+Signature',
+                !isSignature &  isRescued ~ 'Rescued Only',
+                 isSignature & !isRescued ~ 'Signature Only',
+                !isSignature & !isRescued ~ 'Neither',
+                TRUE ~ 'Missing Data'
+            )
+    )
+```
+Make tables
+```{r contingency_data}
+# treatment.degs.df %>% count(treatment) %>% print(n=Inf)
+contingency.df <- 
+    treatment.degs.df %>% 
+    mutate(isSignature=ifelse(Untreated.fdr < 0.1, 'BH < 0.1', 'N.S.')) %>% 
+    inner_join(
+        rescued.genes.df,
+        by=
+            join_by(
+                EnsemblID,
+                gene_name, 
+                treatment
+            )
+    ) %>%
+    mutate(
+        direction.Treated=ifelse(Treated.lfc > 0,  'Treated.Up', 'Treated.Down'),
+        direction.Untreated=ifelse(Untreated.lfc > 0,  'Untreated.Up', 'Untreated.Down')
+    ) %>% 
+    # dplyr::select(-matches('.lfc|.pvalue|.fdr')) %>% 
+    dplyr::count(
+        Rescue.Category,
+        isSignature,
+        treatment,
+        isRescued,
+        direction.Treated,
+        direction.Untreated
+    ) %>%
+    pivot_wider(
+        names_from=starts_with('direction.'),
+        names_sep='_',
+        values_fill=0,
+        values_from=n
+    )
+```
+```{r contingency_fishers}
+fisher.pvalues.df <- 
+    contingency.df %>% 
+    rowwise() %>% 
+    mutate(
+        Total=
+            sum(
+                Treated.Down_Untreated.Up,
+                Treated.Up_Untreated.Up,
+                Treated.Down_Untreated.Down,
+                Treated.Up_Untreated.Down
+            )
+    ) %>% 
+    mutate(
+        fisher.results=
+            matrix(
+                c(
+                    Treated.Down_Untreated.Up,   Treated.Up_Untreated.Up,
+                    Treated.Down_Untreated.Down, Treated.Up_Untreated.Down
+                ), 
+                byrow=TRUE,
+                ncol=2
+            ) %>% 
+            fisher.test(alternative='greater') %>%
+            tidy()
+    ) %>% 
+    unnest(fisher.results) %>%
+    ungroup()
+```
+
+# Rescued Genes Contingency Tables
+
+```{r contingency_fisher_pvalues}
+fisher.pvalues.df %>% 
+    filter(
+        Rescue.Category %in% c('isRescued.Naive'),
+        isSignature == 'BH < 0.1',
+        isRescued
+    ) %>% 
+    dplyr::select(
+        Rescue.Category,
+        isSignature,
+        treatment,
+        p.value,
+        Treated.Down_Untreated.Up,
+        Treated.Up_Untreated.Up,
+        Treated.Down_Untreated.Down,
+        Treated.Up_Untreated.Down,
+        Total 
+    ) %>% 
+    print(n=Inf)
+```
+```{r contingency_tables}
+fisher.pvalues.df %>% 
+    filter(
+        isSignature == 'BH < 0.1',
+        Rescue.Category %in% c('isRescued.Naive'),
+        isRescued
+    ) %>% 
+    dplyr::select(
+        Rescue.Category,
+        isSignature,
+        treatment,
+        Treated.Down_Untreated.Up,
+        Treated.Up_Untreated.Up,
+        Treated.Down_Untreated.Down,
+        Treated.Up_Untreated.Down
+    ) %>%
+    pivot_longer(
+        starts_with('Treated.'),
+        names_to='category',
+        values_to='n'
+    ) %>%
+    separate_wider_delim(
+        category,
+        delim='_',
+        names=c('direction.Treated', 'direction.Untreated')
+    ) %>%
+    pivot_wider(
+        names_from=direction.Treated,
+        values_from=n
+    )
+```
+
+# LFC Scatter plots
+
+```{r rescue_lfc_scatter_plots}
+# Genes per category per treatment
+deg.rescues.df %>% 
+    dplyr::count(treatment, Gene.Status) %>% 
+    pivot_wider(names_from=Gene.Status, values_from=n)
+# scatter plot fnc
+make_lfc_scatterplot <- function(
+    plot.df,
+    plotname=NA,
+    color.map=lfc.colors,
+    scales='fixed',
+    width=10,
+    height=7){
+    plot.df <- 
+        plot.df %>% 
+        left_join(
+            fisher.pvalues.df %>% 
+            filter(
+                isSignature == 'BH < 0.1',
+                isRescued
+            ) %>% 
+            mutate(treatment=factor(treatment, levels=levels(plot.df$treatment))) %>% 
+            dplyr::select(
+                treatment,
+                Rescue.Category,
+                p.value
+            ),
+            by=join_by(treatment, Rescue.Category)
+        )
+    treatment_labels <- 
+        plot.df %>% 
+        mutate(labels=glue('{treatment}, Fisher P={format(p.value, digits=3, trim=TRUE)}')) %>%
+        dplyr::select(treatment, labels) %>% 
+        distinct() %>% 
+        deframe()
+    plot.obj <- 
+        plot.df %>% 
+        ggplot(
+            aes(
+                x=Untreated.lfc,
+                y=Treated.lfc,
+                color=Gene.Status
+            )
+        ) +
+        geom_point(alpha=0.6, size=0.5) +
+        geom_smooth(method=lm) +
+        geom_hline(yintercept=0, linetype='dashed', linewidth=0.3) +
+        geom_vline(xintercept=0, linetype='dashed', linewidth=0.3) +
+        scale_color_manual(values=lfc.colors) +
+        facet_wrap(
+            ~ treatment,
+            ncol=4,
+            labeller=labeller(treatment=treatment_labels),
+            scales=scales
+        ) +
+        labs(
+            x='Untreated XDP vs Control LFC',
+            y='Treated XDP vs Untreated XDP LFC'
+        ) +
+        add_ggtheme() +
+        theme(legend.position='top')
+    if (!is.na(plotname)) {
+        ggsave(
+            plot.obj, 
+            filename=file.path(FIGURES_DIR, plotname),
+            width=width,
+            height=height,
+            units='in'
+        )
+    } else {
+        plot.obj
+    }
+}
+# Category colors
+lfc.colors <- 
+    c(
+        "Signature Only"="#D95F02" ,
+        # "Rescued+Signature"="#7570B3" ,
+        "Rescued+Signature"="#0000FF" ,
+        "Rescued Only"="#E7298A",
+        # 'Rescued+Signature'='mediumorchid',
+        # 'Rescued Only'='cadetblue3',
+        # 'Signature Only'='chocolate2',
+        'Neither'='lightgrey'
+    )
+# All categories & all treatments
+deg.rescues.df %>% 
+    make_lfc_scatterplot(plotname='Treated.vs.Untreated.LFC.scatterplot.pdf')
+# Rescued+Signatures Only & All treatments
+deg.rescues.df %>% 
+    filter(Gene.Status == 'Rescued+Signature') %>% 
+    make_lfc_scatterplot(plotname='Treated.vs.Untreated.LFC.scatterplot.RescueOnly.pdf')
+# All Categories & Leading Treatments Only
+deg.rescues.df %>% 
+    filter(treatment %in% c('dSVA', 'ASO131', 'ASO880')) %>% 
+    make_lfc_scatterplot(plotname='Treated.vs.Untreated.LFC.scatterplot.LeadingOnly.pdf')
+# Rescued+Signatures Only & Leading Treatments Only
+deg.rescues.df %>% 
+    filter(Gene.Status == 'Rescued+Signature') %>% 
+    filter(treatment %in% c('dSVA', 'ASO131', 'ASO880')) %>% 
+    # mutate(treatment=factor(treatment, levels=c('ASO131', 'ASO880', 'dSVA'))) %>% 
+    # {.} -> plot.df
+    mutate(treatment=factor(treatment, levels=c('dSVA', 'ASO880', 'ASO131'))) %>% 
+    make_lfc_scatterplot(
+        plotname='Treated.vs.Untreated.LFC.scatterplot.LeadingRescuedOnly.pdf',
+        scales='fixed',
+        width=10,
+        height=4
+    )
+```
+```{r pub_version}
+# scatter plot fnc
+make_pub_lfc_scatterplot <- function(
+    plot.df,
+    plotname=NA,
+    color.map,
+    scales='fixed',
+    width=10,
+    height=7){
+    # join data
+    plot.df <- 
+        plot.df %>% 
+        left_join(
+            fisher.pvalues.df %>% 
+            filter(
+                isSignature == 'BH < 0.1',
+                isRescued
+            ) %>% 
+            mutate(treatment=factor(treatment, levels=levels(plot.df$treatment))) %>% 
+            dplyr::select(
+                treatment,
+                Rescue.Category,
+                p.value
+            ),
+            by=join_by(treatment, Rescue.Category)
+        )
+    # treatment name + pvalue
+    treatment_labels <- 
+        plot.df %>% 
+        mutate(
+            p.value=format(p.value, digits=3, scientific=TRUE, trim=FALSE),
+            labels=glue('{treatment}, P={p.value}')
+        ) %>% 
+        dplyr::select(treatment, labels) %>% 
+        distinct() %>% 
+        deframe()
+    # make plot
+    plot.obj <- 
+        plot.df %>% 
+        ggplot(
+            aes(
+                y=Untreated.lfc,
+                x=Treated.lfc,
+                color=Gene.Status
+            )
+        ) +
+        geom_point(alpha=0.6, size=0.5) +
+        geom_smooth(method=lm) +
+        geom_hline(yintercept=0, linetype='dashed', linewidth=0.3) +
+        geom_vline(xintercept=0, linetype='dashed', linewidth=0.3) +
+        scale_color_manual(
+            values=color.map
+        ) +
+        facet_wrap(
+            treatment ~ .,
+            ncol=4,
+            labeller=labeller(treatment=treatment_labels),
+            scales=scales
+        ) +
+        labs(
+            y='Untreated XDP vs Control ln(FC)',
+            x='Treated XDP vs Untreated XDP ln(FC)'
+            # x='Untreated XDP vs Treated XDP log2(FC)'
+        ) +
+        add_ggtheme() +
+        theme(legend.position='top')
+    # Save
+    if (!is.na(plotname)) {
+        ggsave(
+            plot.obj, 
+            filename=file.path(FIGURES_DIR, plotname),
+            width=width,
+            height=height,
+            units='in'
+        )
+    } else {
+        plot.obj
+    }
+}
+# Make final version
+deg.rescues.df %>% 
+    filter(treatment %in% c('dSVA', 'ASO131', 'ASO880', 'ASO876')) %>% 
+    mutate(treatment=factor(treatment, levels=c('ASO876', 'dSVA', 'ASO880', 'ASO131'))) %>% 
+    filter(Gene.Status %in% c('Signature Only', 'Rescued+Signature')) %>% 
+    mutate(
+        Gene.Status=
+            case_when(
+                Gene.Status == 'Signature Only'      ~ "Not Rescued & Signature Genes",
+                Gene.Status == 'Rescued+Signature' ~ "Rescued & Signature Genes"
+            )
+    ) %>% 
+    # {.} -> plot.df
+    # dplyr::count(treatment, Gene.Status)
+    make_pub_lfc_scatterplot(
+        plotname='Treated.vs.Untreated.LFC.scatterplot.LeadingRescuedOnly.BlueGray.pdf',
+        color.map=
+            c(
+                "Not Rescued & Signature Genes"='lightgrey',
+                "Rescued & Signature Genes"="#0000FF"
+            ),
+        scales='fixed',
+        width=3.2 * length(unique(pull(., treatment))),
+        height=4
+    )
+```
+
+# Rescued Genes Overlap
+
+Overlap of rescue genes
+```{r upset_plots}
+# deg.rescues.df %>% dplyr::count(treatment, Rescue.Category, Gene.Status)
+upset.df <- 
+    deg.rescues.df %>%
+    filter(Rescue.Category == 'isRescued.Naive') %>%
+    # mutate(Treated.direction=Treated.lfc > 0) %>% 
+    # mutate(Untreated.direction=Unreated.lfc > 0) %>% 
+    dplyr::select(
+        EnsemblID,
+        gene_name,
+        treatment,
+        # Treated.direction,
+        # Untreated.direction,
+        # isSignature,
+        Gene.Status
+    )
+# plot fnc
+make_upset_plot <- function(
+    plot.df,
+    plotname,
+    width=10,
+    height=7,
+    ...){
+    plot.df <- 
+        plot.df %>% 
+        add_column(isStatus=TRUE) %>% 
+        pivot_wider(
+            names_from=treatment,
+            names_prefix='treatment.',
+            values_from=isStatus,
+            values_fill=FALSE
+            
+        )
+    plot.obj <- 
+        upset(
+            plot.df,
+            plot.df %>% 
+                dplyr::select(starts_with('treatment.')) %>% 
+                colnames(),
+            width_ratio=0.1,
+            mode='exclusive_intersection',
+            name='Treatment',
+            labeller=function(x) gsub('^treatment.', '', x),
+            set_sizes=(
+                upset_set_size() +
+                theme(axis.text.x=element_text(angle=45))
+            )
+        ) +
+        ggtitle('Overlapping Genes')
+    # save obj
+    if (!is.na(plotname)) {
+        ggsave(
+            plot.obj, 
+            filename=file.path(FIGURES_DIR, plotname),
+            width=width,
+            height=height,
+            units='in'
+        )
+    } else {
+        plot.obj
+    }
+}
+# Plot leaders only
+upset.df %>% 
+    filter(Gene.Status == 'Rescued+Signature') %>% 
+    filter(treatment %in% c('dSVA', 'ASO880', 'ASO131')) %>%
+    make_upset_plot(
+        plotname='upset.Rescued+Signature.LeadinOnly.pdf',
+        width=10,
+        height=7
+    )
+```
+```{r venn_diagram_leading}
+leading.rescued.gene.overlap.df <- 
+    upset.df %>% 
+    filter(Gene.Status == 'Rescued+Signature') %>% 
+    filter(treatment %in% c('dSVA', 'ASO880', 'ASO131')) %>%
+    add_column(isStatus=TRUE) %>% 
+    pivot_wider(
+        names_from=treatment,
+        names_prefix='treatment.',
+        values_from=isStatus,
+        values_fill=FALSE
+    )
+plot.df <- 
+    leading.rescued.gene.overlap.df %>% 
+    dplyr::select(starts_with('treatment.')) %>% 
+    rename_with(~ gsub('^treatment.', '', .x))
+figure <- 
+    (
+        ggplot(arrange_venn(plot.df))
+        + coord_fixed()
+        + theme_void()
+        + scale_color_venn_mix(plot.df)
+        + geom_venn_region(data=plot.df, alpha=0.05)
+        + geom_point(aes(x=x, y=y, color=region), size=1)
+        + geom_venn_circle(plot.df)
+        + geom_venn_label_set(plot.df, aes(label=region))
+        + geom_venn_label_region(
+            plot.df, aes(label=size),
+            outwards_adjust=1.75,
+            position=position_nudge(y=0.2)
+        )
+        + scale_fill_venn_mix(plot.df, guide='none')
+    )
+ggsave(
+    figure,
+    filename=file.path(FIGURES_DIR, 'venn.Rescued+Signature.LeadingOnly.pdf'),
+    width=6,
+    height=6,
+    units='in'
+)
+```
+Enrichment results for gene rescues
+```{r go_groups}
+function.annotations.df <- 
+    load_all_annotations() %>% 
+    filter(
+        Ontology %in% c(
+            'C2.CP',
+            # C3.TFT,
+            'C5.GOBP',
+            # C5.GOCC,
+            'C5.GOMF',
+            # C5.HPO,
+            # GENELISTS,
+            # NDG,
+            # SYNGO,
+            # TAF1
+            'HPO'
+        )
+    ) %>% 
+    group_by(Ontology) %>%
+    mutate(background.lst.genes=genes %>% unlist() %>% c() %>% unique() %>% list()) %>%
+    ungroup() %>% 
+    dplyr::rename(
+        'functional.name'=term,
+        'functional.lst.genes'=genes,
+        'functional.n.genes'=n_genes
+    ) %>%
+    dplyr::select(-c(functional.n.genes)) %>% 
+    rowwise() %>%
+    mutate(functional.lst.genes=list(unique(functional.lst.genes))) %>% 
+    ungroup()
+```
+```{r go_query}
+only.overlapping.genes <- 
+    leading.rescued.gene.overlap.df %>% 
+    filter(if_all(where(is.logical), ~ . == TRUE)) %>%
+    pull(gene_name)
+all.overlapping.genes <- 
+    leading.rescued.gene.overlap.df %>% 
+    rename_with(~ gsub('^treatment.', '', .x)) %>% 
+    filter(
+            (dSVA & ASO880 & ASO131) |
+                   (ASO880 & ASO131) |
+            (dSVA & ASO880) |
+            (dSVA &          ASO131)
+    ) %>%
+    pull(gene_name)
+query.df <- 
+    tribble(
+        ~query.lst.genes, ~query.name,
+        only.overlapping.genes, 'intersection-Rescued+Signature-ASO131,ASO880,dSVA',
+        all.overlapping.genes, 'union-Rescued+Signature-ASO131,ASO880,dSVA',
+    )
+```
+```{r go_enrichment}
+# print group+query
+# function.annotations.df %>% cross_join(query.df) %>% dplyr::count(query.name, Ontology)
+# function.annotations.df %>% head(3) %>% cross_join(query.df) %>% colnames()
+# Generate results
+annotation.results <- 
+    check_cached_results(
+        results_file=file.path(FIGURES_DIR, 'all.enrichment.results.tsv'),
+        force_redo=TRUE,
+        # return_data=TRUE,
+        results_fnc=compute_all_fisher_tests,
+        function.annotations.df=function.annotations.df,
+        query.df=query.df,
+        nrows=Inf
+    ) %>% 
+    mutate(
+        significance=
+            case_when(
+                fdr < 0.1 ~ 'FDR',
+                p.value < 0.05 ~ 'Nominal',
+                TRUE ~ 'N.S.'
+            ) %>%
+            factor(levels=c('FDR', 'Nominal', 'N.S.'))
+    )
+```
+```{r print_enrichment_results}
+annotation.results %>% 
+    ungroup() %>% 
+    # dplyr::count(functional.n.genes == (is_term_is_hit + is_term_not_hit))
+    dplyr::count(
+        query.name,
+        significance,
+        Ontology
+    )
+annotation.results %>% 
+    filter(significance == 'FDR') %>%
+    dplyr::select(
+        # background.n.genes,
+        # query.name,
+        # query.n.genes,
+        Ontology,
+        functional.name,
+        functional.n.genes,
+        is_term_is_hit,
+        is_term_not_hit,
+        not_term_is_hit,
+        not_term_not_hit,
+        p.value,
+        # significance
+        fdr
+    )
+annotation.results %>% 
+    filter(significance == 'FDR') %>% 
+    pull(term_and_hit_genes)
+```
