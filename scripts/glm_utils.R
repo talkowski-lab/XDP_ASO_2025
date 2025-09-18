@@ -293,46 +293,46 @@ build_DE_DESeq2_model <- function(
     return(ddssva)
 }
 
-buildDEmodel <- function(feature_matrix,
-                         sampleTable,
-                         method="DESeq2",
-                         estimate_offset=TRUE,
-                         offset_str=NULL,
-                         apply_sva=TRUE,
-                         n_sv=NULL,
-                         test_terms=NULL,
-                         remove_terms=NULL,
-                         random_terms=NULL,
-                         distro_family="poisson"
-                ){
+buildDEmodel <- function(
+    feature_matrix,
+    sampleTable,
+    method="DESeq2",
+    estimate_offset=TRUE,
+    offset_str=NULL,
+    apply_sva=TRUE,
+    n_sv=NULL,
+    test_terms=NULL,
+    remove_terms=NULL,
+    random_terms=NULL,
+    distro_family="poisson"){
     # define object for output format for GLM/GLMM methods
-    setClass("GLMres",
-             representation(y="matrix",
-                            colData="data.frame",
-                            design="formula",
-                            beta="matrix",
-                            stderr="matrix",
-                            pval="matrix",
-                            fdr="matrix",
-                            vcov="data.frame",
-                            resid="matrix",
-                            deSV="matrix",
-                            status="data.frame",
-                            # models="list",
-                            args="list"
-             )
+    setClass(
+        "GLMres",
+        representation(
+            y="matrix",
+            colData="data.frame",
+            design="formula",
+            beta="matrix",
+            stderr="matrix",
+            pval="matrix",
+            fdr="matrix",
+            vcov="data.frame",
+            resid="matrix",
+            deSV="matrix",
+            status="data.frame",
+            # models="list",
+            args="list"
+        )
     )
-    setMethod(f="show",
-              signature="GLMres",
-              definition=function(object){
-                            print("class: GLMres")
-                            print("slots: y, colData, design, beta, stderr, pval, fdr, vcov, resid, deSV, status, args") #, models")
-                            print(sprintf("deSV dim: %s %s", 
-                                          nrow(object@deSV), 
-                                          ncol(object@deSV)
-                                  )
-                            )
-                         }
+    setMethod(
+        f="show",
+        signature="GLMres",
+        definition=
+            function(object){
+                print("class: GLMres")
+                print("slots: y, colData, design, beta, stderr, pval, fdr, vcov, resid, deSV, status, args") #, models")
+                print(sprintf("deSV dim: %s %s", nrow(object@deSV), ncol(object@deSV))) 
+            }
     )
     # validate input terms
     if (all(test_terms %in% colnames(sampleTable)) == FALSE){
